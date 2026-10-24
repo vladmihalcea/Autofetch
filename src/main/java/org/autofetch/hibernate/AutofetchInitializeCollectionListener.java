@@ -1,50 +1,34 @@
 /**
- * This file is part of Autofetch.
- * Autofetch is free software: you can redistribute it and/or modify
- * it under the terms of the Lesser GNU General Public License as published
- * by the Free Software Foundation, either version 3 of the License,
- * or (at your option) any later version. Autofetch is distributed in the
- * hope that it will be useful, but WITHOUT ANY WARRANTY; without even
- * the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- * PURPOSE.  See the Lesser GNU General Public License for more details. You
- * should have received a copy of the Lesser GNU General Public License along
- * with Autofetch.  If not, see <http://www.gnu.org/licenses/>.
+ * Copyright 2008 Ali Ibrahim
+ * <p>
+ * This file is part of Autofetch. Autofetch is free software: you can redistribute it and/or modify it under the terms of the Lesser GNU General
+ * Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. Autofetch is
+ * distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE.  See the Lesser GNU General Public License for more details. You should have received a copy of the Lesser GNU General Public
+ * License along with Autofetch.  If not, see <http://www.gnu.org/licenses/>.
+ * <p>
+ * Hibernate 7 port (2026): extends the Hibernate 7 DefaultInitializeCollectionEventListener; without prefetch paths, or
+ * when the collection is cached, it delegates to the default listener (which reads the second-level cache)
+ * instead of copying its cache lookup.
  */
 package org.autofetch.hibernate;
 
-import java.io.Serializable;
+import org.hibernate.HibernateException;
+import org.hibernate.LockMode;
+import org.hibernate.collection.spi.PersistentCollection;
+import org.hibernate.engine.spi.CollectionEntry;
+import org.hibernate.event.internal.DefaultInitializeCollectionEventListener;
+import org.hibernate.event.spi.EventSource;
+import org.hibernate.event.spi.InitializeCollectionEvent;
+import org.hibernate.persister.collection.CollectionPersister;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
-import org.hibernate.HibernateException;
-import org.hibernate.LockMode;
-import org.hibernate.cache.spi.access.CollectionDataAccess;
-import org.hibernate.cache.spi.entry.CollectionCacheEntry;
-import org.hibernate.collection.spi.PersistentCollection;
-import org.hibernate.engine.internal.CacheHelper;
-import org.hibernate.engine.spi.CollectionEntry;
-import org.hibernate.engine.spi.PersistenceContext;
-import org.hibernate.engine.spi.SessionFactoryImplementor;
-import org.hibernate.engine.spi.SessionImplementor;
-import org.hibernate.event.internal.DefaultInitializeCollectionEventListener;
-import org.hibernate.event.spi.InitializeCollectionEvent;
-import org.hibernate.event.spi.InitializeCollectionEventListener;
-import org.hibernate.persister.collection.CollectionPersister;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-/**
- * This class is based in part on
- * org.hibernate.event.def.DefaultInitializeCollectionEventListener.
- * It adds logic to determine prefetch directives and to setup the
- * tracking of elements in the loaded collection.
- *
- * @author Ali Ibrahim <aibrahim@cs.utexas.edu>
- */
-public class AutofetchInitializeCollectionListener extends
-		DefaultInitializeCollectionEventListener implements InitializeCollectionEventListener {
+public class AutofetchInitializeCollectionListener extends DefaultInitializeCollectionEventListener {
 
 	private static final Logger log = LoggerFactory.getLogger( AutofetchInitializeCollectionListener.class );
 
@@ -56,138 +40,57 @@ public class AutofetchInitializeCollectionListener extends
 
 	@Override
 	public void onInitializeCollection(InitializeCollectionEvent event) throws HibernateException {
-		PersistentCollection collection = event.getCollection();
-		SessionImplementor source = event.getSession();
-
-		CollectionEntry ce = source.getPersistenceContext().getCollectionEntry( collection );
+		PersistentCollection<?> collection = event.getCollection();
+		EventSource source = event.getSession();
+		CollectionEntry ce = source.getPersistenceContextInternal().getCollectionEntry( collection );
 		if ( ce == null ) {
 			throw new HibernateException( "collection was evicted" );
 		}
-
 		if ( !collection.wasInitialized() ) {
-
-			final boolean foundInCache = initializeCollectionFromCache(
-					ce.getLoadedKey(), ce.getLoadedPersister(), collection, source
-			);
-
-			if ( foundInCache ) {
-				log.trace( "collection initialized from cache" );
+			CollectionPersister cp = ce.getLoadedPersister();
+			String classname = cp.getOwnerEntityPersister().getEntityName();
+			String tpKey = cp.getRole();
+			List<Path> prefetchPaths = extentManager.getPrefetchPaths( tpKey );
+			boolean useCache = cp.hasCache() && source.getCacheMode().isGetEnabled();
+			if ( !prefetchPaths.isEmpty() && !useCache ) {
+				String assoc = tpKey.substring( tpKey.lastIndexOf( '.' ) + 1 );
+				List<Path> augmentedPaths = new ArrayList<>();
+				augmentedPaths.add( new Path().addTraversal( assoc ) );
+				for ( Path p : prefetchPaths ) {
+					augmentedPaths.add( p.prependTraversal( assoc ) );
+				}
+				log.debug( "Prefetch paths: " + augmentedPaths );
+				AutofetchLoadListener.getResult(
+						augmentedPaths,
+						classname,
+						ce.getLoadedKey(),
+						LockMode.NONE,
+						source
+				);
+				if ( !collection.wasInitialized() ) {
+					throw new IllegalStateException( "Collection not initialized" );
+				}
 			}
 			else {
-				log.trace( "collection not cached" );
-
-				CollectionPersister cp = ce.getLoadedPersister();
-				String classname = cp.getOwnerEntityPersister().getEntityName();
-				String tpKey = cp.getRole();
-
-				List<Path> prefetchPaths = extentManager.getPrefetchPaths( tpKey );
-				if ( !prefetchPaths.isEmpty() ) {
-					String assoc = tpKey.substring( tpKey.lastIndexOf( '.' ) + 1 );
-					List<Path> augmentedPaths = new ArrayList<>();
-					augmentedPaths.add( new Path().addTraversal( assoc ) );
-
-					for ( Path p : prefetchPaths ) {
-						augmentedPaths.add( p.prependTraversal( assoc ) );
-					}
-
-					log.debug( "Prefetch paths: " + augmentedPaths );
-					AutofetchLoadListener.getResult(
-							augmentedPaths,
-							classname,
-							ce.getKey(),
-							LockMode.NONE,
-							event.getSession()
-					);
-
-					if ( !collection.wasInitialized() ) {
-						throw new IllegalStateException( "Collection not initialized" );
-					}
-				}
-				else {
-					ce.getLoadedPersister().initialize( ce.getLoadedKey(), source );
-					if ( source.getFactory().getStatistics().isStatisticsEnabled() ) {
-						source.getFactory().getStatisticsImplementor().fetchCollection( ce.getLoadedPersister()
-																								.getRole() );
-					}
-				}
-
-				boolean oldTracking = false;
-				if ( collection instanceof Trackable ) {
-					Trackable trackable = (Trackable) collection;
-					oldTracking = trackable.disableTracking();
-				}
-
-				Iterator elementsIter = collection.entries( cp );
-				while ( elementsIter.hasNext() ) {
-					extentManager.markAsRoot( elementsIter.next(), tpKey );
-				}
-
-				if ( collection instanceof Trackable ) {
-					Trackable trackable = (Trackable) collection;
-					if ( oldTracking ) {
-						trackable.enableTracking();
-					}
-				}
-
-				log.trace( "collection initialized" );
-			}
-		}
-	}
-
-	/**
-	 * Try to initialize a collection from the cache
-	 */
-	private boolean initializeCollectionFromCache(
-			Serializable id,
-			CollectionPersister persister,
-			PersistentCollection collection,
-			SessionImplementor source) throws HibernateException {
-
-		if ( source.getLoadQueryInfluencers().hasEnabledFilters()
-				&& persister.isAffectedByEnabledFilters( source ) ) {
-			return false;
-		}
-
-		final boolean useCache = persister.hasCache() && source.getCacheMode().isGetEnabled();
-
-		if ( useCache ) {
-			final SessionFactoryImplementor factory = source.getFactory();
-			final CollectionDataAccess cache = persister.getCacheAccessStrategy();
-			final Object ck = cache.generateCacheKey(
-					id,
-					persister,
-					source.getFactory(),
-					source.getTenantIdentifier()
-			);
-			final Object ce = CacheHelper.fromSharedCache( source, ck, persister.getCacheAccessStrategy() );
-			if ( factory.getStatistics().isStatisticsEnabled() ) {
-				if ( ce == null ) {
-					factory.getStatistics().collectionCacheMiss(
-							persister.getNavigableRole(),
-							persister.getCacheAccessStrategy().getRegion().getName()
-					);
-				}
-				else {
-					factory.getStatistics().collectionCacheHit(
-							persister.getNavigableRole(),
-							persister.getCacheAccessStrategy().getRegion().getName()
-					);
-				}
+				super.onInitializeCollection( event );
 			}
 
-			if ( ce != null ) {
-				CollectionCacheEntry cacheEntry = (CollectionCacheEntry) persister.getCacheEntryStructure()
-						.destructure( ce, factory );
-
-				final PersistenceContext persistenceContext = source.getPersistenceContext();
-				cacheEntry.assemble( collection, persister, persistenceContext.getCollectionOwner( id, persister ) );
-				persistenceContext.getCollectionEntry( collection ).postInitialize( collection );
-				return true;
+			boolean oldTracking = false;
+			if ( collection instanceof Trackable ) {
+				Trackable trackable = (Trackable) collection;
+				oldTracking = trackable.disableTracking();
 			}
-
-			return false;
+			Iterator<?> elementsIter = collection.entries( cp );
+			while ( elementsIter.hasNext() ) {
+				extentManager.markAsRoot( elementsIter.next(), tpKey );
+			}
+			if ( collection instanceof Trackable ) {
+				Trackable trackable = (Trackable) collection;
+				if ( oldTracking ) {
+					trackable.enableTracking();
+				}
+			}
+			log.trace( "collection initialized" );
 		}
-
-		return false;
 	}
 }

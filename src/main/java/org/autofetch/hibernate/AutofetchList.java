@@ -1,19 +1,18 @@
 /**
- * This file is part of Autofetch.
- * Autofetch is free software: you can redistribute it and/or modify
- * it under the terms of the Lesser GNU General Public License as published
- * by the Free Software Foundation, either version 3 of the License,
- * or (at your option) any later version. Autofetch is distributed in the
- * hope that it will be useful, but WITHOUT ANY WARRANTY; without even
- * the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- * PURPOSE.  See the Lesser GNU General Public License for more details. You
- * should have received a copy of the Lesser GNU General Public License along
- * with Autofetch.  If not, see <http://www.gnu.org/licenses/>.
+ * Copyright 2008 Ali Ibrahim
+ * <p>
+ * This file is part of Autofetch. Autofetch is free software: you can redistribute it and/or modify it under the terms of the Lesser GNU General
+ * Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. Autofetch is
+ * distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE.  See the Lesser GNU General Public License for more details. You should have received a copy of the Lesser GNU General Public
+ * License along with Autofetch.  If not, see <http://www.gnu.org/licenses/>.
+ * <p>
+ * Hibernate 7 port (2026): the Hibernate 7 PersistentCollection API; every read or write method still calls the
+ * superclass first and then records the access.
  */
 package org.autofetch.hibernate;
 
-import org.hibernate.collection.internal.PersistentList;
-import org.hibernate.engine.spi.SessionImplementor;
+import org.hibernate.collection.spi.PersistentList;
 import org.hibernate.engine.spi.SharedSessionContractImplementor;
 
 import java.util.Collection;
@@ -22,17 +21,7 @@ import java.util.List;
 import java.util.ListIterator;
 import java.util.Set;
 
-/**
- * Based on {@link PersistentList}.
- * Usually delegates to super class except when operation
- * might add an element. In that case, it re-implements
- * the method so that it can record an access before the
- * element is added.
- *
- * @author Ali Ibrahim <aibrahim@cs.utexas.edu>
- */
-@SuppressWarnings("unchecked")
-public class AutofetchList extends PersistentList implements Trackable {
+public class AutofetchList<E> extends PersistentList<E> implements Trackable {
 
     private final CollectionTracker collectionTracker = new CollectionTracker();
 
@@ -45,8 +34,8 @@ public class AutofetchList extends PersistentList implements Trackable {
         super(session);
     }
 
-    public AutofetchList(SharedSessionContractImplementor session, List list) {
-        super(session, list);
+    public AutofetchList(SharedSessionContractImplementor session, List<E> collection) {
+        super(session, collection);
     }
 
     @Override
@@ -78,9 +67,11 @@ public class AutofetchList extends PersistentList implements Trackable {
         this.collectionTracker.removeTracker(stats);
     }
 
-    /**
-     * @see java.util.Set#size()
-     */
+    @Override
+    public boolean isAccessed() {
+        return this.collectionTracker.isAccessed();
+    }
+
     @Override
     public int size() {
         int ret = super.size();
@@ -88,9 +79,6 @@ public class AutofetchList extends PersistentList implements Trackable {
         return ret;
     }
 
-    /**
-     * @see java.util.Set#isEmpty()
-     */
     @Override
     public boolean isEmpty() {
         boolean ret = super.isEmpty();
@@ -98,9 +86,6 @@ public class AutofetchList extends PersistentList implements Trackable {
         return ret;
     }
 
-    /**
-     * @see java.util.Set#contains(Object)
-     */
     @Override
     public boolean contains(Object object) {
         boolean ret = super.contains(object);
@@ -108,19 +93,13 @@ public class AutofetchList extends PersistentList implements Trackable {
         return ret;
     }
 
-    /**
-     * @see java.util.Set#iterator()
-     */
     @Override
-    public Iterator iterator() {
-        Iterator iter = super.iterator();
+    public Iterator<E> iterator() {
+        Iterator<E> iter = super.iterator();
         this.accessed();
         return iter;
     }
 
-    /**
-     * @see java.util.Set#toArray()
-     */
     @Override
     public Object[] toArray() {
         Object[] arr = super.toArray();
@@ -128,33 +107,20 @@ public class AutofetchList extends PersistentList implements Trackable {
         return arr;
     }
 
-    /**
-     * @see java.util.Set#toArray(Object[])
-     */
     @Override
-    public Object[] toArray(Object[] array) {
-        Object[] arr = super.toArray(array);
+    public <A> A[] toArray(A[] array) {
+        A[] arr = super.toArray(array);
         this.accessed();
         return arr;
     }
 
-    /**
-     * @see java.util.Set#add(Object)
-     */
     @Override
-    public boolean add(Object value) {
-        if (isOperationQueueEnabled()) {
-            return super.add(value);
-        }
-
-        this.write();
+    public boolean add(E value) {
+        boolean ret = super.add(value);
         this.accessed();
-        return list.add(value);
+        return ret;
     }
 
-    /**
-     * @see java.util.Set#remove(Object)
-     */
     @Override
     public boolean remove(Object value) {
         boolean ret = super.remove(value);
@@ -162,52 +128,18 @@ public class AutofetchList extends PersistentList implements Trackable {
         return ret;
     }
 
-    /**
-     * @see java.util.Set#containsAll(Collection)
-     */
     @Override
-    public boolean containsAll(Collection coll) {
+    public boolean containsAll(Collection<?> coll) {
         boolean ret = super.containsAll(coll);
         this.accessed();
         return ret;
     }
 
-    /**
-     * @see java.util.Set#addAll(Collection)
-     */
     @Override
-    public boolean addAll(Collection values) {
-        if (values.size() == 0) {
-            return false;
-        }
-
-        if (isOperationQueueEnabled()) {
-            return super.addAll(values);
-        }
-
-        this.write();
+    public boolean addAll(Collection<? extends E> coll) {
+        boolean ret = super.addAll(coll);
         this.accessed();
-        return list.addAll(values);
-    }
-
-    /**
-     * @see java.util.Set#retainAll(Collection)
-     */
-    @Override
-    public boolean retainAll(Collection coll) {
-        boolean val = super.retainAll(coll);
-        this.accessed();
-        return val;
-    }
-
-    /**
-     * @see java.util.Set#removeAll(Collection)
-     */
-    @Override
-    public boolean removeAll(Collection coll) {
-        boolean val = super.removeAll(coll);
-        this.accessed();
-        return val;
+        return ret;
     }
 
     @Override
@@ -216,125 +148,18 @@ public class AutofetchList extends PersistentList implements Trackable {
         this.accessed();
     }
 
-    /**
-     * @see java.util.List#add(int, Object)
-     */
     @Override
-    public void add(int index, Object value) {
-        if (index < 0) {
-            throw new ArrayIndexOutOfBoundsException("negative index");
-        }
-
-        if (!isOperationQueueEnabled()) {
-            write();
-            this.accessed();
-            this.list.add(index, value);
-        } else {
-            super.add(index, value);
-        }
-    }
-
-    /**
-     * @see java.util.List#addAll(int, Collection)
-     */
-    @Override
-    public boolean addAll(int i, Collection c) {
-        if (c.size() > 0) {
-            write();
-            this.accessed();
-            return list.addAll(i, c);
-        }
-
-        return false;
-    }
-
-    /**
-     * @see java.util.List#get(int)
-     */
-    @Override
-    public Object get(int i) {
-        Object val = super.get(i);
+    public boolean retainAll(Collection<?> coll) {
+        boolean ret = super.retainAll(coll);
         this.accessed();
-        return val;
+        return ret;
     }
 
-    /**
-     * @see java.util.List#indexOf(Object)
-     */
     @Override
-    public int indexOf(Object o) {
-        int val = super.indexOf(o);
+    public boolean removeAll(Collection<?> coll) {
+        boolean ret = super.removeAll(coll);
         this.accessed();
-        return val;
-    }
-
-    /**
-     * @see java.util.List#lastIndexOf(Object)
-     */
-    @Override
-    public int lastIndexOf(Object o) {
-        int val = super.lastIndexOf(o);
-        this.accessed();
-        return val;
-    }
-
-    /**
-     * @see java.util.List#listIterator()
-     */
-    @Override
-    public ListIterator listIterator() {
-        ListIterator val = super.listIterator();
-        this.accessed();
-        return val;
-    }
-
-    /**
-     * @see java.util.List#listIterator(int)
-     */
-    @Override
-    public ListIterator listIterator(int i) {
-        ListIterator val = super.listIterator(i);
-        this.accessed();
-        return val;
-    }
-
-    /**
-     * @see java.util.List#remove(int)
-     */
-    @Override
-    public Object remove(int i) {
-        Object val = super.remove(i);
-        this.accessed();
-        return val;
-    }
-
-    /**
-     * @see java.util.List#set(int, Object)
-     */
-    @Override
-    public Object set(int index, Object value) {
-        if (index < 0) {
-            throw new ArrayIndexOutOfBoundsException("negative index");
-        }
-
-        Object old = isPutQueueEnabled() ? readElementByIndex(index) : UNKNOWN;
-        if (old == UNKNOWN) {
-            write();
-            accessed();
-            return list.set(index, value);
-        }
-
-        return super.set(index, value);
-    }
-
-    /**
-     * @see java.util.List#subList(int, int)
-     */
-    @Override
-    public List subList(int start, int end) {
-        List val = super.subList(start, end);
-        this.accessed();
-        return val;
+        return ret;
     }
 
     @Override
@@ -359,12 +184,76 @@ public class AutofetchList extends PersistentList implements Trackable {
     }
 
     @Override
-    public boolean isAccessed() {
-        return this.collectionTracker.isAccessed();
+    public void add(int i, E o) {
+        super.add(i, o);
+        this.accessed();
+    }
+
+    @Override
+    public boolean addAll(int i, Collection<? extends E> c) {
+        boolean ret = super.addAll(i, c);
+        this.accessed();
+        return ret;
+    }
+
+    @Override
+    public E get(int i) {
+        E ret = super.get(i);
+        this.accessed();
+        return ret;
+    }
+
+    @Override
+    public int indexOf(Object o) {
+        int ret = super.indexOf(o);
+        this.accessed();
+        return ret;
+    }
+
+    @Override
+    public int lastIndexOf(Object o) {
+        int ret = super.lastIndexOf(o);
+        this.accessed();
+        return ret;
+    }
+
+    @Override
+    public ListIterator<E> listIterator() {
+        ListIterator<E> ret = super.listIterator();
+        this.accessed();
+        return ret;
+    }
+
+    @Override
+    public ListIterator<E> listIterator(int i) {
+        ListIterator<E> ret = super.listIterator(i);
+        this.accessed();
+        return ret;
+    }
+
+    @Override
+    public E remove(int i) {
+        E ret = super.remove(i);
+        this.accessed();
+        return ret;
+    }
+
+    @Override
+    public E set(int i, E o) {
+        E ret = super.set(i, o);
+        this.accessed();
+        return ret;
+    }
+
+    @Override
+    public List<E> subList(int start, int end) {
+        List<E> ret = super.subList(start, end);
+        this.accessed();
+        return ret;
     }
 
     private void accessed() {
-        if (this.wasInitialized()) {
+        if (wasInitialized()) {
             this.collectionTracker.trackAccess(this.list);
         }
     }

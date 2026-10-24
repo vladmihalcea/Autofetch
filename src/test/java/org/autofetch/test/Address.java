@@ -3,8 +3,8 @@
  */
 package org.autofetch.test;
 
-import javax.persistence.Basic;
-import javax.persistence.Embeddable;
+import jakarta.persistence.Basic;
+import jakarta.persistence.Embeddable;
 
 /**
  * Represents an address for an employee.

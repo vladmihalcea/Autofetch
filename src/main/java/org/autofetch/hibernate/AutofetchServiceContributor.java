@@ -6,16 +6,14 @@
  * distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
  * PARTICULAR PURPOSE.  See the Lesser GNU General Public License for more details. You should have received a copy of the Lesser GNU General Public
  * License along with Autofetch.  If not, see <http://www.gnu.org/licenses/>.
+ * <p>
+ * Hibernate 7 port (2026): registered in META-INF/services instead of through auto-service.
  */
 package org.autofetch.hibernate;
 
 import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
 import org.hibernate.service.spi.ServiceContributor;
 
-import com.google.auto.service.AutoService;
-
-@SuppressWarnings("unused")
-@AutoService(ServiceContributor.class)
 public class AutofetchServiceContributor implements ServiceContributor {
 
 	@Override

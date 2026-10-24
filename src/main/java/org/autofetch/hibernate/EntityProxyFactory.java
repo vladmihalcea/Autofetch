@@ -1,98 +1,128 @@
 /**
  * Copyright 2008 Ali Ibrahim
  * <p>
- * This file is part of Autofetch.
- * Autofetch is free software: you can redistribute it and/or modify
- * it under the terms of the Lesser GNU General Public License as published
- * by the Free Software Foundation, either version 3 of the License,
- * or (at your option) any later version. Autofetch is distributed in the
- * hope that it will be useful, but WITHOUT ANY WARRANTY; without even
- * the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- * PURPOSE.  See the Lesser GNU General Public License for more details. You
- * should have received a copy of the Lesser GNU General Public License along
- * with Autofetch.  If not, see <http://www.gnu.org/licenses/>.
+ * This file is part of Autofetch. Autofetch is free software: you can redistribute it and/or modify it under the terms of the Lesser GNU General
+ * Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. Autofetch is
+ * distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE.  See the Lesser GNU General Public License for more details. You should have received a copy of the Lesser GNU General Public
+ * License along with Autofetch.  If not, see <http://www.gnu.org/licenses/>.
+ * <p>
+ * Hibernate 7 port (2026): ByteBuddy instead of Javassist, and one factory per service instead of static state, because the
+ * entity metadata now comes from AutofetchMappingContributor instead of the tuplizer.
  */
 package org.autofetch.hibernate;
 
-import javassist.util.proxy.MethodFilter;
-import javassist.util.proxy.Proxy;
-import javassist.util.proxy.ProxyFactory;
-import org.hibernate.internal.CoreLogging;
-import org.hibernate.internal.CoreMessageLogger;
+import net.bytebuddy.ByteBuddy;
+import net.bytebuddy.description.modifier.Visibility;
+import net.bytebuddy.dynamic.loading.ClassInjector;
+import net.bytebuddy.dynamic.loading.ClassLoadingStrategy;
+import net.bytebuddy.implementation.MethodDelegation;
+import org.hibernate.HibernateException;
 
-import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
+import java.io.Serializable;
+import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
-public class EntityProxyFactory {
+import static net.bytebuddy.matcher.ElementMatchers.isFinalizer;
+import static net.bytebuddy.matcher.ElementMatchers.named;
+import static net.bytebuddy.matcher.ElementMatchers.not;
+import static net.bytebuddy.matcher.ElementMatchers.takesNoArguments;
 
-    private static final CoreMessageLogger LOG = CoreLogging.messageLogger(AutofetchLazyInitializer.class);
+public class EntityProxyFactory implements Serializable {
 
-    private static final MethodFilter FINALIZE_FILTER = new MethodFilter() {
-        @Override
-        public boolean isHandled(Method m) {
-            // skip finalize methods
-            return !(m.getParameterTypes().length == 0 && m.getName().equals("finalize"));
-        }
-    };
+    private static final long serialVersionUID = 1L;
+
+    static final String HANDLER_FIELD = "$$_autofetch_handler";
 
     private static final ConcurrentMap<Class<?>, Class<?>> entityFactoryMap = new ConcurrentHashMap<>();
 
-    private static final ConcurrentMap<Class<?>, Constructor<?>> entityConstructorMap = new ConcurrentHashMap<>();
+    private final ExtentManager extentManager;
 
-    private static Class<?> getProxyFactory(Class<?> persistentClass, String idMethodName) {
-        if (!entityFactoryMap.containsKey(persistentClass)) {
-            ProxyFactory factory = new ProxyFactory();
-            factory.setSuperclass(persistentClass);
-            factory.setInterfaces(new Class[]{TrackableEntity.class});
-            factory.setFilter(FINALIZE_FILTER);
-            entityFactoryMap.putIfAbsent(persistentClass, factory.createClass());
-        }
+    private final ConcurrentMap<String, EntityMetadata> entities = new ConcurrentHashMap<>();
 
-        return entityFactoryMap.get(persistentClass);
+    private final ConcurrentMap<Class<?>, String> entityNames = new ConcurrentHashMap<>();
+
+    EntityProxyFactory(ExtentManager extentManager) {
+        this.extentManager = extentManager;
     }
 
-    private static <T> Constructor<T> getDefaultConstructor(Class<T> clazz) throws NoSuchMethodException {
-        Constructor<T> constructor = clazz.getDeclaredConstructor();
-        if (!constructor.isAccessible()) {
-            constructor.setAccessible(true);
-        }
-
-        return constructor;
+    void register(String entityName, Class<?> mappedClass, Set<Property> persistentProperties) {
+        entities.put(entityName, new EntityMetadata(mappedClass, persistentProperties));
+        entityNames.put(mappedClass, entityName);
     }
 
-    public static Object getProxyInstance(Class persistentClass, String idMethodName, Set<Property> persistentProperties,
-                                          ExtentManager extentManager)
-            throws InstantiationException, IllegalAccessException, NoSuchMethodException, InvocationTargetException {
+    /**
+     * Returns the entity name of a tracking subclass instance's class.
+     */
+    String getEntityName(Class<?> proxyClass) {
+        return entityNames.get(proxyClass.getSuperclass());
+    }
 
-        if (Modifier.isFinal(persistentClass.getModifiers())) {
-            // Use the default constructor, because final classes cannot be inherited.
-            return useDefaultConstructor(persistentClass);
+    /**
+     * Returns a new tracking instance of the entity, or {@code null} to let Hibernate use the default constructor,
+     * which is the case for final classes, because they cannot be subclassed.
+     */
+    Object newInstance(String entityName) {
+        EntityMetadata metadata = entities.get(entityName);
+        if (metadata == null || Modifier.isFinal(metadata.mappedClass.getModifiers())) {
+            return null;
         }
-
-        Class<?> factory = getProxyFactory(persistentClass, idMethodName);
         try {
-            final Object proxy = factory.newInstance();
-            ((Proxy) proxy).setHandler(new EntityProxyMethodHandler(persistentProperties, extentManager));
+            Class<?> proxyClass = getProxyFactory(metadata.mappedClass);
+            Object proxy = proxyClass.getDeclaredConstructor().newInstance();
+            Field handler = proxyClass.getField(HANDLER_FIELD);
+            handler.set(proxy, new EntityProxyMethodHandler(metadata.persistentProperties, extentManager));
             return proxy;
-        } catch (IllegalAccessException | InstantiationException e) {
-            return useDefaultConstructor(persistentClass);
+        } catch (ReflectiveOperationException e) {
+            throw new HibernateException("Unable to instantiate class " + metadata.mappedClass.getName(), e);
         }
     }
 
-    private static Object useDefaultConstructor(Class<?> clazz) throws NoSuchMethodException, InstantiationException,
-            InvocationTargetException, IllegalAccessException {
+    private static Class<?> getProxyFactory(Class<?> persistentClass) {
+        return entityFactoryMap.computeIfAbsent(persistentClass, EntityProxyFactory::createProxyClass);
+    }
 
-        if (!entityConstructorMap.containsKey(clazz)) {
-            entityConstructorMap.put(clazz, getDefaultConstructor(clazz));
+    private static Class<?> createProxyClass(Class<?> persistentClass) {
+        return new ByteBuddy()
+                .subclass(persistentClass)
+                .name(persistentClass.getName() + "$Autofetch")
+                .implement(TrackableEntity.class)
+                .defineField(HANDLER_FIELD, EntityProxyMethodHandler.class, Visibility.PUBLIC)
+                // Like the Javassist proxies, intercept every overridable method except finalize
+                .method(not(isFinalizer()).and(not(named("clone").and(takesNoArguments()))))
+                .intercept(MethodDelegation.withDefaultConfiguration()
+                        .filter(named("intercept"))
+                        .toField(HANDLER_FIELD))
+                .make()
+                .load(persistentClass.getClassLoader(), classLoadingStrategy(persistentClass))
+                .getLoaded();
+    }
+
+    private static ClassLoadingStrategy<ClassLoader> classLoadingStrategy(Class<?> persistentClass) {
+        if (ClassInjector.UsingLookup.isAvailable()) {
+            try {
+                return ClassLoadingStrategy.UsingLookup.of(
+                        MethodHandles.privateLookupIn(persistentClass, MethodHandles.lookup()));
+            } catch (IllegalAccessException e) {
+                // The entity's module does not open its package: fall back to a child class loader
+            }
         }
+        return ClassLoadingStrategy.Default.WRAPPER;
+    }
 
-        final Constructor<?> c = entityConstructorMap.get(clazz);
+    private static final class EntityMetadata implements Serializable {
 
-        return c.newInstance((Object[]) null);
+        private final Class<?> mappedClass;
+
+        private final Set<Property> persistentProperties;
+
+        EntityMetadata(Class<?> mappedClass, Set<Property> persistentProperties) {
+            this.mappedClass = mappedClass;
+            this.persistentProperties = persistentProperties;
+        }
     }
 }

@@ -14,6 +14,9 @@
  */
 package org.autofetch.hibernate;
 
+import org.hibernate.proxy.HibernateProxy;
+import org.hibernate.proxy.LazyInitializer;
+
 import java.io.Serializable;
 import java.lang.reflect.Method;
 import java.util.HashSet;
@@ -65,6 +68,20 @@ public class EntityTracker implements Serializable {
 						&& e.getCause() instanceof NoSuchMethodException ) {
 					continue; // Weird property, just ignore it.
 				}
+			}
+			// Hibernate 7 port: lazy to-one proxies are Hibernate's own, not Trackable. An initialized proxy is
+			// tracked through its entity, and an uninitialized one keeps its tracker in AutofetchInterceptor until
+			// its entity is instantiated.
+			if ( propVal instanceof HibernateProxy ) {
+				LazyInitializer lazyInitializer = ( (HibernateProxy) propVal ).getHibernateLazyInitializer();
+				if ( lazyInitializer.isUninitialized() ) {
+					Statistics propTracker = extendTracker( tracker, prop.getName(), prop.isCollection() );
+					if ( propTracker != null ) {
+						AutofetchInterceptor.addPendingTracker( lazyInitializer, propTracker );
+					}
+					continue;
+				}
+				propVal = lazyInitializer.getImplementation();
 			}
 			if ( propVal instanceof Trackable) { //TODO Add trackable interface to all the entities (proxies)
 				Trackable propEntity = (Trackable) propVal;

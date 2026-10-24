@@ -1,44 +1,31 @@
 /**
  * Copyright 2008 Ali Ibrahim
  * <p>
- * This file is part of Autofetch.
- * Autofetch is free software: you can redistribute it and/or modify
- * it under the terms of the Lesser GNU General Public License as published
- * by the Free Software Foundation, either version 3 of the License,
- * or (at your option) any later version. Autofetch is distributed in the
- * hope that it will be useful, but WITHOUT ANY WARRANTY; without even
- * the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
- * PURPOSE.  See the Lesser GNU General Public License for more details. You
- * should have received a copy of the Lesser GNU General Public License along
- * with Autofetch.  If not, see <http://www.gnu.org/licenses/>.
+ * This file is part of Autofetch. Autofetch is free software: you can redistribute it and/or modify it under the terms of the Lesser GNU General
+ * Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version. Autofetch is
+ * distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+ * PARTICULAR PURPOSE.  See the Lesser GNU General Public License for more details. You should have received a copy of the Lesser GNU General Public
+ * License along with Autofetch.  If not, see <http://www.gnu.org/licenses/>.
+ * <p>
+ * Hibernate 7 port (2026): the Hibernate 7 DefaultLoadEventListener and HQL syntax (an explicit select clause and id()).
  */
 package org.autofetch.hibernate;
 
-import java.io.Serializable;
+import org.hibernate.LockMode;
+import org.hibernate.FlushMode;
+import org.hibernate.event.internal.DefaultLoadEventListener;
+import org.hibernate.event.spi.EventSource;
+import org.hibernate.event.spi.LoadEvent;
+import org.hibernate.persister.entity.EntityPersister;
+import org.hibernate.proxy.HibernateProxy;
+import org.hibernate.query.SelectionQuery;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.hibernate.FlushMode;
-import org.hibernate.HibernateException;
-import org.hibernate.LockMode;
-import org.hibernate.Query;
-import org.hibernate.Session;
-import org.hibernate.engine.spi.EntityKey;
-import org.hibernate.event.internal.DefaultLoadEventListener;
-import org.hibernate.event.spi.LoadEvent;
-import org.hibernate.persister.entity.EntityPersister;
-import org.hibernate.proxy.HibernateProxy;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
-/**
- * This class extends the hibernate default event listener to add prefetch
- * directives where appropriate and setup the tracking of loaded objects.
- *
- * @author Ali Ibrahim <aibrahim@cs.utexas.edu>
- */
 public class AutofetchLoadListener extends DefaultLoadEventListener {
 
 	private static final long serialVersionUID = 1L;
@@ -56,7 +43,7 @@ public class AutofetchLoadListener extends DefaultLoadEventListener {
 			final LoadEvent event,
 			final EntityPersister persister) {
 
-		String classname = event.getEntityClassName();
+		String classname = persister.getEntityName();
 		if ( log.isDebugEnabled() ) {
 			log.debug( "Entity id: {}", event.getEntityId() );
 		}
@@ -81,7 +68,7 @@ public class AutofetchLoadListener extends DefaultLoadEventListener {
 			}
 		}
 		else {
-			result = super.loadFromDatasource( event, persister);
+			result = super.loadFromDatasource( event, persister );
 		}
 
 		extentManager.markAsRoot( result, classname );
@@ -89,13 +76,11 @@ public class AutofetchLoadListener extends DefaultLoadEventListener {
 		return result;
 	}
 
-
-
 	static Object getResult(
 			List<Path> prefetchPaths, String classname,
-			Serializable id, LockMode lm, Session sess) {
+			Object id, LockMode lm, EventSource sess) {
 		StringBuilder queryStr = new StringBuilder();
-		queryStr.append( "from " ).append( classname ).append( " entity" );
+		queryStr.append( "select entity from " ).append( classname ).append( " entity" );
 		Map<Path, String> pathAliases = new HashMap<>();
 		int aliasCnt = 0;
 		pathAliases.put( new Path(), "entity" );
@@ -110,19 +95,21 @@ public class AutofetchLoadListener extends DefaultLoadEventListener {
 			queryStr.append( " left outer join fetch " );
 			queryStr.append( oldAlias ).append( "." ).append( lastField ).append( " " ).append( newAlias );
 		}
-		queryStr.append( " where entity.id = :id" );
+		queryStr.append( " where id(entity) = :id" );
 
 		if ( log.isDebugEnabled() ) {
 			log.debug( "Query: " + queryStr );
 		}
 
-		Query q = sess.createQuery( queryStr.toString() );
-		q.setLockMode( "entity", lm );
-		q.setFlushMode( FlushMode.MANUAL );
+		SelectionQuery<Object> q = sess.createSelectionQuery( queryStr.toString(), Object.class );
+		if ( lm != null && lm != LockMode.NONE && lm != LockMode.READ ) {
+			q.setHibernateLockMode( lm );
+		}
+		q.setHibernateFlushMode( FlushMode.MANUAL );
 		q.setParameter( "id", id );
 
 		long startTimeMillis = System.currentTimeMillis();
-		Object o = q.uniqueResult();
+		Object o = q.getSingleResultOrNull();
 		if ( log.isDebugEnabled() ) {
 			log.debug( "Query execution time: " +
 							   ( System.currentTimeMillis() - startTimeMillis ) );

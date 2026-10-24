@@ -3,84 +3,83 @@
 
     <modelVersion>4.0.0</modelVersion>
 
+    <!--
+        Hibernate 7 port of AutoFetch (Ibrahim and Cook, ECOOP 2006), branched from the 5.3.0 branch of
+        ErikJonasson/Autofetch (commit 5a9baa7). See PORTING.md for what changed and why.
+    -->
     <groupId>org.autofetch</groupId>
     <artifactId>autofetch</artifactId>
-    <version>0.1-SNAPSHOT</version>
+    <version>0.2-hibernate7-SNAPSHOT</version>
+
+    <licenses>
+        <license>
+            <name>GNU Lesser General Public License</name>
+            <url>https://www.gnu.org/licenses/lgpl-2.1.html</url>
+            <comments>See COPYING.LESSER; the source headers state version 3 or later.</comments>
+        </license>
+    </licenses>
 
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <maven.compiler.source>1.8</maven.compiler.source>
-        <maven.compiler.target>1.8</maven.compiler.target>
-        <hibernate-orm.version>5.3.1.Final</hibernate-orm.version>
+        <maven.compiler.release>17</maven.compiler.release>
+        <hibernate-orm.version>7.4.13.Final</hibernate-orm.version>
+        <byte-buddy.version>1.18.14</byte-buddy.version>
+        <slf4j.version>2.0.16</slf4j.version>
+        <junit.version>4.13.2</junit.version>
+        <h2.version>2.3.232</h2.version>
     </properties>
 
     <dependencies>
-<dependency>
-    <groupId>org.hibernate.orm.tooling</groupId>
-    <artifactId>hibernate-enhance-maven-plugin</artifactId>
-    <version>${hibernate-orm.version}</version>
-</dependency>
-
-
         <dependency>
-            <groupId>org.hibernate</groupId>
+            <groupId>org.hibernate.orm</groupId>
             <artifactId>hibernate-core</artifactId>
             <version>${hibernate-orm.version}</version>
         </dependency>
+        <!-- Generates the tracking subclasses of the entity classes (Javassist in the Hibernate 5.3 version) -->
         <dependency>
-            <groupId>org.hibernate</groupId>
-            <artifactId>hibernate-testing</artifactId>
-            <version>${hibernate-orm.version}</version>
+            <groupId>net.bytebuddy</groupId>
+            <artifactId>byte-buddy</artifactId>
+            <version>${byte-buddy.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>${slf4j.version}</version>
         </dependency>
 
+        <!-- JUnit 4, as in the Hibernate 5.3 version, so the original tests keep their form -->
         <dependency>
             <groupId>junit</groupId>
             <artifactId>junit</artifactId>
-            <version>4.12</version>
+            <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
-            <version>1.4.197</version>
+            <version>${h2.version}</version>
+            <scope>test</scope>
         </dependency>
-
         <dependency>
             <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-log4j12</artifactId>
-            <version>1.7.25</version>
-        </dependency>
-
-        <dependency>
-            <groupId>com.google.auto.service</groupId>
-            <artifactId>auto-service</artifactId>
-            <version>1.0-rc4</version>
-            <scope>provided</scope>
+            <artifactId>slf4j-simple</artifactId>
+            <version>${slf4j.version}</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
+
     <build>
-    <plugins>
-
-        <plugin>
-            <groupId>org.hibernate.orm.tooling</groupId>
-            <artifactId>hibernate-enhance-maven-plugin</artifactId>
-            <version>${hibernate-orm.version}</version>
-            <executions>
-                <execution>
-                    <configuration>
-                        <failOnError>true</failOnError>
-                        <enableLazyInitialization>true</enableLazyInitialization>
-                        <enableDirtyTracking>true</enableDirtyTracking>
-                        <enableAssociationManagement>true</enableAssociationManagement>
-                        <enableExtendedEnhancement>false</enableExtendedEnhancement>
-                    </configuration>
-                    <goals>
-                        <goal>enhance</goal>
-                    </goals>
-                </execution>
-            </executions>
-        </plugin>
-
-    </plugins>
-</build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.5.5</version>
+            </plugin>
+        </plugins>
+    </build>
 </project>
